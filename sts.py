@@ -110,17 +110,23 @@ class GameState:
     def __init__(self, deck=None):
 
         if deck is None:
-            self.deck = Deck()
+            deck = Deck()
         else:
             self.deck = deck
 
-        self.draw_pile = DrawPile(self.deck.cards)
+        self.draw_pile = DrawPile(deck.cards)
         self.discard_pile = DiscardPile()
         self.hand = Hand(self.draw_pile, self.discard_pile)
-
         self.energy = 3
         self.vulnerable_turns = 0
         self.turn_count = 0
+        
+        # Precompute deck statistics
+        attacks = [c for c in deck.cards if c.type == 'Attack']
+        self.total_attacks = len(attacks)
+        self.avg_attack_damage = sum(c.damage for c in attacks)/self.total_attacks if attacks else 0
+        self.deck_size = len(deck.cards)
+        self.expected_attacks_per_turn = (self.total_attacks / self.deck_size) * 5
 
     def _display_pile(self, pile, title):
         if len(pile.cards) == 0:
@@ -160,73 +166,94 @@ class GameState:
     def simulate_turn(self):
         self.turn_count += 1
         self.energy = 3
+
         self.hand.draw()
-        
-        current_vulnerable = self.vulnerable_turns > 0
-        damage_dealt = self.play_optimal_attacks(current_vulnerable)
-        
+
+        damage_dealt, best_combo = self.play_optimal_attacks()
+    
+        self.end_turn()
+
         if self.vulnerable_turns > 0:
             self.vulnerable_turns -= 1
         
-        self.hand.end_turn()
-        return damage_dealt
+        return damage_dealt, best_combo
 
-    def play_optimal_attacks(self, current_vulnerable):
+    def play_optimal_attacks(self):
         attacks = [card for card in self.hand.cards if card.type == 'Attack']
-        best_damage = 0
+        best_score = 0
         best_combo = []
 
-        for combo in chain(*[combinations(attacks, r) for r in range(1, len(attacks)+1)]):
-            cost = sum(c.energy for c in combo)
-            if cost > self.energy:
-                continue
+        current_vulnerable = self.vulnerable_turns > 0
 
-            # Calculate damage with vulnerability effects
+        # Calculate value of 1 vulnerable turn
+        vuln_value = 0.5 * self.avg_attack_damage * self.expected_attacks_per_turn
+
+        for combo in chain(*[combinations(attacks, r) for r in range(1, len(attacks)+1)]):
+            # Sort combo: vulnerabilities first, then highest damage/energy
+            sorted_combo = sorted(
+                combo, 
+                key=lambda c: (-c.vulnerable, 
+                               -c.damage/c.energy if c.energy > 0 else 0))
+
             total_damage = 0
-            vulnerable_applied = False
             temp_vulnerable = self.vulnerable_turns
-            
-            for card in combo:
-                # Apply damage multiplier if vulnerability was active before playing this card
-                multiplier = 1.5 if (current_vulnerable or vulnerable_applied) else 1.0
+            energy_cost = 0
+            active_vulnerable = current_vulnerable
+
+            # Simulate playing cards in optimal order
+            for card in sorted_combo:
+                if energy_cost + card.energy > self.energy:
+                    break
+
+                # Apply damage multiplier
+                multiplier = 1.5 if active_vulnerable else 1.0
                 total_damage += card.damage * multiplier
-                
-                # Update vulnerability status
+
+                # Update vulnerability
                 if card.vulnerable > 0:
                     temp_vulnerable += card.vulnerable
-                    vulnerable_applied = True
+                    active_vulnerable = True  # For subsequent cards in this combo
 
-            # Consider future turns' vulnerability
-            future_bonus = 0
-            if temp_vulnerable > self.vulnerable_turns:
-                future_bonus = (temp_vulnerable - self.vulnerable_turns) * 0.2  # Empirical bonus
+                energy_cost += card.energy
 
-            if (total_damage + future_bonus) > best_damage:
-                best_damage = total_damage
-                best_combo = combo
+            # Calculate future value of new vulnerability
+            added_vuln = max(temp_vulnerable - self.vulnerable_turns, 0)
+            future_value = added_vuln * vuln_value
+
+            # Energy-efficient scoring
+            energy_ratio = energy_cost / self.energy  # Prefer using full energy
+
+            if (total_damage + future_value) * energy_ratio > best_score:
+                best_score = (total_damage + future_value) * energy_ratio
+                best_combo = sorted_combo
 
         # Play the best combination
+        final_damage = 0
+        active_vulnerable = current_vulnerable
         for card in best_combo:
-            if card in self.hand.cards:
+            if card in self.hand.cards and self.energy >= card.energy:
+                # Apply damage
+                multiplier = 1.5 if active_vulnerable else 1.0
+                final_damage += card.damage * multiplier
+                
+                # Update game state
                 self.hand.play(card)
                 self.energy -= card.energy
-                # Update actual vulnerability
+                
+                # Update vulnerability
                 if card.vulnerable > 0:
                     self.vulnerable_turns += card.vulnerable
+                    active_vulnerable = True
 
-        return best_damage
+        return final_damage, best_combo
 
     def simulate_battle(self, num_turns=10):
         total_damage = []
+        cards_played = []
+        self.vulnerable_turns = 0
         for _ in range(num_turns):
-            # Reset vulnerable status at start of turn (if not permanent)
-            # self.vulnerable_turns = max(0, self.vulnerable_turns - 1)
-            
-            # Always simulate full number of turns
-            damage = self.simulate_turn()
+            damage, best_combo = self.simulate_turn()
             total_damage.append(damage)
+            cards_played.append(best_combo)
             
-            # For debugging deck cycling:
-            # print(f"Turn {_+1}: Draw={len(self.draw_pile.cards)}, Discard={len(self.discard_pile.cards)}")
-            
-        return total_damage
+        return total_damage, cards_played
