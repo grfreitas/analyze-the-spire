@@ -1,7 +1,9 @@
-from scipy.stats import hypergeom
-
 import random
 from itertools import chain, combinations
+
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image
 
 
 class Card:
@@ -30,12 +32,24 @@ class Card:
 
 
 class Deck:
-    def __init__(self, strikes=5, defends=4, bashes=1):
+    def __init__(self, n_strike=5, n_defend=4, n_bash=1):
         self.cards = (
-            [Card.Strike() for _ in range(strikes)] +
-            [Card.Defend() for _ in range(defends)] +
-            [Card.Bash() for _ in range(bashes)]
+            [Card.Strike() for _ in range(n_strike)] +
+            [Card.Defend() for _ in range(n_defend)] +
+            [Card.Bash() for _ in range(n_bash)]
         )
+
+    def display(self):
+        fig, axs = plt.subplots(1, len(self.cards), figsize=(15, 5))
+        axs = iter(axs.flatten())
+
+        for card in self.cards:
+            img = np.asarray(Image.open(f'assets/{card}.jpeg'))
+            ax = next(axs)
+            ax.imshow(img)
+            ax.set_axis_off()
+    
+        plt.show()
     
 
 class DrawPile:
@@ -82,27 +96,63 @@ class Hand:
         for i in range(n - len(self.cards)):
             self.cards.append(self.draw_pile.cards.pop())
 
-    def play(self, card):
-        self.cards.remove(card)
-        self.discard_pile.cards.append(card)        
-    
-        self.cards_played.append(card)
-
-    def end_turn(self):
-        self.cards_played = []
-        self.discard_pile.cards.extend(self.cards)
-        self.cards = []
+    def play(self, card_name):
+        # Plays the first card with the given name
+        for card in self.cards:
+            if card.name == card_name:
+                self.cards.remove(card)
+                self.discard_pile.cards.append(card)
+                self.cards_played.append(card)
+                break
 
 
 class GameState:
-    def __init__(self, deck):
-        self.deck = deck
-        self.draw_pile = DrawPile(deck.cards)
+    def __init__(self, deck=None):
+
+        if deck is None:
+            self.deck = Deck()
+        else:
+            self.deck = deck
+
+        self.draw_pile = DrawPile(self.deck.cards)
         self.discard_pile = DiscardPile()
         self.hand = Hand(self.draw_pile, self.discard_pile)
+
         self.energy = 3
         self.vulnerable_turns = 0
         self.turn_count = 0
+
+    def _display_pile(self, pile, title):
+        if len(pile.cards) == 0:
+            return
+
+        fig, axs = plt.subplots(1, len(pile.cards), figsize=(12, 5))
+
+        if len(pile.cards) == 1:
+            axs = np.array(axs)
+
+        axs = iter(axs.flatten())
+
+        for card in pile.cards:
+            img = np.asarray(Image.open(f'assets/{card}.jpeg'))
+            ax = next(axs)
+            ax.imshow(img)
+            ax.set_axis_off()
+    
+        plt.show()
+
+    def end_turn(self):
+        self.cards_played = []
+        self.discard_pile.cards.extend(self.hand.cards)
+        self.hand.cards = []
+
+    def display(self):
+        print('Draw Pile')
+        self._display_pile(self.draw_pile, "Draw Pile")
+        print('Hand')
+        self._display_pile(self.hand, "Hand")
+        print('Discard Pile')
+        self._display_pile(self.discard_pile, "Discard Pile")
 
     def reset(self):
         self.__init__(self.deck)
